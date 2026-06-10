@@ -1,0 +1,30 @@
+{
+  "dataset": "Yelp (English cross-lingual validation)",
+  "metrics": {
+    "textblob": {
+      "sentiment_f1": 0.359,
+      "rating_mae": 1.07,
+      "aspect_f1": 0.62,
+      "json_validity": 1.0,
+      "n": 200,
+      "avg_latency_ms": 0
+    },
+    "zero_shot": {
+      "sentiment_f1": 0.699,
+      "rating_mae": 0.435,
+      "aspect_f1": 0.721,
+      "json_validity": 1.0,
+      "n": 200,
+      "avg_latency_ms": 1249
+    },
+    "few_shot": {
+      "sentiment_f1": 0.642,
+      "rating_mae": 0.47,
+      "aspect_f1": 0.8,
+      "json_validity": 1.0,
+      "n": 200,
+      "avg_latency_ms": 1175
+    }
+  },
+  "test_size": 200
+}

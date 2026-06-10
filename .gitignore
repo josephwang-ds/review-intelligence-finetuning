@@ -1,0 +1,14 @@
+.env
+data/
+__pycache__/
+*.pyc
+.DS_Store
+*.egg-info/
+.streamlit/secrets.toml
+models/
+.env.*
+node_modules/
+.next/
+.venv/
+venv/
+.ipynb_checkpoints/

@@ -1,0 +1,19 @@
+# Core
+datasets==2.19.0
+openai>=1.30.0
+pandas>=2.0.0
+numpy>=1.26.0
+
+# Baselines
+textblob>=0.18.0
+
+# Evaluation
+scikit-learn>=1.4.0
+
+# Demo app
+streamlit>=1.35.0
+plotly>=5.20.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.66.0
