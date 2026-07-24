@@ -10,9 +10,7 @@
 
 import json
 import time
-import re
 from pathlib import Path
-from typing import Optional
 from collections import defaultdict
 
 from textblob import TextBlob
@@ -23,10 +21,10 @@ import numpy as np
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from config import (
-    ROOT, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
-    ASAP_PROCESSED_DIR
-)
+from config import ROOT, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, ASAP_PROCESSED_DIR
+from schema import ASAP_PROFILE
+from prompts import FEW_SHOT_BANK
+from structured_client import call_structured
 
 REPORTS_DIR = ROOT / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
@@ -34,95 +32,8 @@ REPORTS_DIR.mkdir(exist_ok=True)
 TEST_SAMPLE_SIZE = 200   # 从 test set 取多少条评测
 RANDOM_SEED = 42
 
-# ── 合法值 ────────────────────────────────────────────────────────────────────
-VALID_SENTIMENTS = ["positive", "neutral", "negative"]
-VALID_ASPECTS = [
-    "location_traffic", "location_distance", "location_easy_to_find",
-    "service_wait_time", "service_attitude", "service_parking", "service_speed",
-    "price_level", "price_value", "price_discount",
-    "env_decoration", "env_noise", "env_space", "env_cleanliness",
-    "food_portion", "food_taste", "food_appearance", "food_recommendation",
-]
-
-# ── Few-shot 示例（来自 ASAP 训练集风格）────────────────────────────────────
-FEW_SHOT_EXAMPLES = [
-    {
-        "review": "菜品非常新鲜，口味地道，服务也很好，就是价格稍微贵了点，但整体值得。",
-        "output": {
-            "sentiment": "positive",
-            "rating_prediction": 4,
-            "aspect_sentiments": {
-                "food_taste": "positive",
-                "service_attitude": "positive",
-                "price_level": "negative"
-            },
-            "problem_type": "overpriced",
-            "action_priority": "low",
-            "operator_action": "review_pricing"
-        }
-    },
-    {
-        "review": "等了将近一个小时才上菜，服务员态度也很差，菜的味道一般，不会再来了。",
-        "output": {
-            "sentiment": "negative",
-            "rating_prediction": 1,
-            "aspect_sentiments": {
-                "service_wait_time": "negative",
-                "service_attitude": "negative",
-                "food_taste": "neutral"
-            },
-            "problem_type": "poor_service",
-            "action_priority": "high",
-            "operator_action": "train_service"
-        }
-    },
-    {
-        "review": "环境不错，装修很有特色，菜量有点少，价格还可以接受，服务一般。",
-        "output": {
-            "sentiment": "neutral",
-            "rating_prediction": 3,
-            "aspect_sentiments": {
-                "env_decoration": "positive",
-                "food_portion": "negative",
-                "price_level": "neutral",
-                "service_attitude": "neutral"
-            },
-            "problem_type": "none",
-            "action_priority": "low",
-            "operator_action": "no_action"
-        }
-    },
-]
-
-# ── Prompt ────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """你是餐厅经营分析助手。分析中文餐厅评论，输出结构化 JSON。
-
-字段说明：
-- sentiment: positive / neutral / negative
-- rating_prediction: 1-5（整数）
-- aspect_sentiments: 涉及的维度及情感，从以下选（可多选）：
-  food_taste, food_portion, food_appearance, food_recommendation,
-  service_attitude, service_wait_time, service_speed, service_parking,
-  price_level, price_value, price_discount,
-  env_decoration, env_noise, env_space, env_cleanliness,
-  location_traffic, location_distance, location_easy_to_find
-- problem_type: taste_issue / poor_service / long_wait / overpriced / hygiene_issue / none
-- action_priority: low / medium / high
-- operator_action: improve_taste / train_service / reduce_wait / review_pricing / fix_hygiene / no_action
-
-只输出 JSON，不要其他文字。"""
-
-
-def build_zero_shot_prompt(text: str) -> str:
-    return f"评论：{text[:400]}\n\n输出 JSON："
-
-
-def build_few_shot_prompt(text: str) -> str:
-    examples = ""
-    for ex in FEW_SHOT_EXAMPLES:
-        examples += f"评论：{ex['review']}\n"
-        examples += f"输出：{json.dumps(ex['output'], ensure_ascii=False)}\n\n"
-    return f"{examples}评论：{text[:400]}\n输出 JSON："
+VALID_SENTIMENTS = ASAP_PROFILE.sentiments
+VALID_ASPECTS = ASAP_PROFILE.aspects
 
 
 # ── TextBlob Baseline ─────────────────────────────────────────────────────────
@@ -169,47 +80,20 @@ def textblob_predict(text: str) -> dict:
     }
 
 
-# ── LLM Baseline ──────────────────────────────────────────────────────────────
-def parse_llm_output(raw: str) -> Optional[dict]:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("```").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        # 尝试提取第一个 {...}
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except Exception:
-                pass
-    return None
-
-
+# ── LLM Baseline（schema 校验 + 修复重试，见 structured_client.py）───────────────
 def llm_predict(client: OpenAI, text: str, mode: str = "zero") -> dict:
-    prompt = build_zero_shot_prompt(text) if mode == "zero" else build_few_shot_prompt(text)
-    start = time.time()
-    try:
-        resp = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            max_tokens=300,
-        )
-        latency = (time.time() - start) * 1000
-        result = parse_llm_output(resp.choices[0].message.content)
-        if result:
-            result["_latency_ms"] = round(latency)
-            result["_valid_json"] = True
-        else:
-            result = {"_valid_json": False, "_latency_ms": round(latency)}
-    except Exception as e:
-        result = {"_valid_json": False, "_error": str(e), "_latency_ms": 0}
-    return result
+    few_shot = FEW_SHOT_BANK["asap"] if mode == "few" else None
+    result, meta = call_structured(
+        client, ASAP_PROFILE, text, mode="full", few_shot=few_shot,
+        model=DEEPSEEK_MODEL, max_tokens=300,
+    )
+    if result is not None:
+        out = result.model_dump()
+        out["_latency_ms"] = meta["latency_ms"]
+        out["_valid_json"] = True
+        out["_repaired"] = meta["repaired"]
+        return out
+    return {"_valid_json": False, "_latency_ms": meta["latency_ms"], "_error": meta["error"]}
 
 
 # ── 评测函数 ──────────────────────────────────────────────────────────────────
@@ -265,7 +149,7 @@ def compute_metrics(predictions: list[dict], gold: list[dict]) -> dict:
 
     # Compute
     sentiment_f1 = f1_score(sentiment_gold, sentiment_pred,
-                             labels=VALID_SENTIMENTS, average="macro",
+                             labels=list(VALID_SENTIMENTS), average="macro",
                              zero_division=0)
     rating_mae = float(np.mean(rating_errors))
     precision = aspect_tp / (aspect_tp + aspect_fp + 1e-9)

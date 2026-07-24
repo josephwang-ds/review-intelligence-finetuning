@@ -21,30 +21,18 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from config import ROOT
+from schema import ASAP_PROFILE
+from prompts import build_system_prompt
 
 # ── 路径配置 ────────────────────────────────────────────────────────────────────
 
 IN_PATH = ROOT / "data" / "asap_dataset" / "labeled" / "train_labeled.jsonl"
 OUT_DIR = ROOT / "data" / "finetune"
 
-# ── System Prompt（完整 6 字段评论分析，与 03_run_baselines.py 风格对齐）──────────
+# ── System Prompt（完整 6 字段评论分析，与 03_run_baselines.py 共用同一份生成逻辑，
+#    保证训练数据里烧录的 prompt 和线上 serving 用的 prompt 不会漂移）──────────────
 
-ASAP_SYSTEM = """你是餐厅经营分析助手。分析中文餐厅评论，输出结构化 JSON。
-
-字段说明：
-- sentiment: positive / neutral / negative
-- rating_prediction: 1-5（整数）
-- aspect_sentiments: 涉及的维度及情感，从以下选（可多选）：
-  food_taste, food_portion, food_appearance, food_recommendation,
-  service_attitude, service_wait_time, service_speed, service_parking,
-  price_level, price_value, price_discount,
-  env_decoration, env_noise, env_space, env_cleanliness,
-  location_traffic, location_distance, location_easy_to_find
-- problem_type: taste_issue / poor_service / long_wait / overpriced / hygiene_issue / location_issue / packaging_issue / none
-- action_priority: low / medium / high
-- operator_action: improve_taste / train_service / reduce_wait / review_pricing / fix_hygiene / no_action
-
-只输出 JSON，不要其他文字。"""
+ASAP_SYSTEM = build_system_prompt(ASAP_PROFILE, mode="full")
 
 
 def build_user_message(record: dict) -> str:

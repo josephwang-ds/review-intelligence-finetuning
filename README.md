@@ -1,8 +1,10 @@
 # Review Intelligence — Chinese Restaurant Review Benchmark
 
-**评论智能分析** · 基于美团点评 ASAP 数据集 · 系统对比四种方案
+**评论智能分析** · 基于美团点评 ASAP 数据集 · 系统对比四种方案 · 从 prompt 到生产部署的完整 LLM 工程实践
 
 Live demo: [josephwang-review-intelligence-finetuning.streamlit.app](https://josephwang-review-intelligence-finetuning.streamlit.app)
+
+The live demo is the Streamlit app only. The FastAPI service, model routing, and monitoring dashboard described in [LLM Engineering](#llm-engineering) below run locally / via Docker — see [ARCHITECTURE.md](ARCHITECTURE.md) for why they're kept separate from the hosted demo.
 
 ---
 
@@ -99,8 +101,31 @@ Corrects natural 4–5 star dominance (78% of original data).
 | Labeling | DeepSeek API (silver labels, 3 fields) |
 | Baselines | TextBlob, DeepSeek zero-shot / few-shot |
 | Fine-tuning | QLoRA on Qwen2.5-1.5B · r=16 · 3,200 samples · Colab T4 |
-| Demo | Streamlit |
+| Structured output | Pydantic (schema-validated, repair-on-failure) |
+| Guardrails / review | Custom PII redaction, prompt-injection heuristic, consistency checks, SQLite review queue |
+| Serving | FastAPI, uvicorn, Docker / docker-compose |
+| Model routing | transformers + peft (local QLoRA inference, MPS) vs. DeepSeek API |
+| Testing | pytest — unit tests + golden regression eval set |
+| Demo | Streamlit (4-method comparison, review queue, monitoring dashboard) |
 | Evaluation | scikit-learn, numpy |
+
+## LLM Engineering
+
+The benchmark above answers *which method wins*. The rest of this repo answers a different question: what does it take to actually run one of these as a system, not a notebook cell? Six pieces, each backed by code and tests — full design discussion and diagrams in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+| Concern | What's actually there | Where |
+|---|---|---|
+| **Structured output** | Pydantic schema — not regex-extracted JSON — with dataset-aware validation and an automatic repair-retry when the model's output doesn't validate | [`src/schema.py`](src/schema.py), [`src/structured_client.py`](src/structured_client.py) |
+| **Prompt engineering** | Prompts generated from one schema per dataset instead of hand-copied per script — the class of bug this replaces: one script's prompt was silently missing two valid `problem_type` values that every other script had, found and fixed during this refactor | [`src/prompts.py`](src/prompts.py) |
+| **Guardrails + human review** | Real PII redaction (phone/email/ID, before the text ever reaches the model — verified, not just displayed masked), a prompt-injection heuristic, business-logic consistency checks, and an actual SQLite-backed review queue with an approve / correct / reject UI | [`src/guardrails.py`](src/guardrails.py), [`src/review_queue.py`](src/review_queue.py), [`pages/1_Review_Queue.py`](pages/1_Review_Queue.py) |
+| **Eval framework** | Fast no-network unit tests for the pure logic, plus a curated ~30-case golden regression set run against the real API — the thing that would actually catch a behavior regression when the prompt changes, which a mock can't | [`tests/`](tests/), [`eval/`](eval/) |
+| **Deployment architecture** | A FastAPI service wrapping the same engine behind `POST /analyze`, with real request logging, containerized — deliberately independent of the Streamlit demo (see ARCHITECTURE.md for why) | [`api/main.py`](api/main.py), [`Dockerfile.api`](Dockerfile.api), [`docker-compose.yml`](docker-compose.yml) |
+| **Model routing** | Routes between the real local fine-tuned model (actually served, not simulated via a persona prompt) and the DeepSeek few-shot call, based on what the caller needs and input complexity, with graceful fallback on failure | [`src/router.py`](src/router.py), [`src/local_model.py`](src/local_model.py) |
+| **Monitoring** | Dashboard reading genuine SQLite request logs — including guardrail trigger rate, a metric that's meaningless without a real total-request denominator | [`pages/2_Monitoring.py`](pages/2_Monitoring.py), [`src/request_log.py`](src/request_log.py) |
+
+```bash
+pytest   # fast unit tests always run; eval/ (real API calls) skips cleanly without DEEPSEEK_API_KEY
+```
 
 ## Quickstart
 
@@ -123,8 +148,21 @@ python src/02_label_asap.py
 # Run baseline evaluation
 python src/03_run_baselines.py
 
-# Launch demo
+# Launch demo (includes Review Queue + Monitoring pages)
 streamlit run app.py
+```
+
+### API / tests / model routing (optional — heavier dependencies)
+
+```bash
+pip install -r requirements-api.txt   # adds pytest, fastapi, torch, transformers, peft on top of requirements.txt
+
+pytest                                        # unit tests always run; eval/ needs DEEPSEEK_API_KEY
+uvicorn api.main:app --reload --port 8000     # http://localhost:8000/docs
+
+python src/07_seed_dashboard_traffic.py       # replay real reviews through /analyze to populate the Monitoring dashboard
+
+docker compose up                             # api (:8000) + streamlit (:8501), containerized
 ```
 
 ## Project Status
@@ -136,6 +174,12 @@ streamlit run app.py
 - [x] Streamlit demo
 - [x] QLoRA fine-tuning Qwen2.5-1.5B (r=16, 3 epochs, Colab T4)
 - [x] Fine-tuned model evaluation (problem_type 0.65 / action_priority 0.74 / operator_action 0.65)
+- [x] Structured output — Pydantic schema + repair-retry (`src/schema.py`, `src/structured_client.py`)
+- [x] Guardrails + human review queue (`src/guardrails.py`, `src/review_queue.py`)
+- [x] Eval framework — unit tests + golden regression set (`tests/`, `eval/`)
+- [x] Deployment architecture — FastAPI service + Docker (`api/`, `ARCHITECTURE.md`)
+- [x] Model routing — real local fine-tuned model vs. DeepSeek, decided by task + complexity (`src/router.py`, `src/local_model.py`)
+- [x] Monitoring dashboard reading real request logs (`pages/2_Monitoring.py`)
 
 ---
 

@@ -20,96 +20,25 @@ from openai import OpenAI
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from config import (
-    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
-    LABEL_MAX_RETRIES, LABEL_TEMPERATURE, ROOT
-)
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, LABEL_MAX_RETRIES, LABEL_TEMPERATURE, ROOT
+from schema import ASAP_PROFILE
+from structured_client import call_structured
 
 ASAP_PROCESSED_DIR = ROOT / "data" / "asap_dataset" / "processed"
 OUT_DIR = ROOT / "data" / "asap_dataset" / "labeled"
 
-# 只需要补这 3 个字段
-VALID_PROBLEM_TYPE = [
-    "taste_issue", "poor_service", "long_wait", "overpriced",
-    "hygiene_issue", "location_issue", "packaging_issue", "none"
-]
-VALID_ACTION_PRIORITY = ["low", "medium", "high"]
-VALID_OPERATOR_ACTION = [
-    "improve_taste", "train_service", "reduce_wait",
-    "review_pricing", "fix_hygiene", "no_action"
-]
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
-
-SYSTEM_PROMPT = """你是一个餐厅经营分析助手。根据评论内容和已知的 aspect 情感标签，补充以下 3 个字段：
-
-- problem_type: 最主要的问题类型（只选一个）：
-    taste_issue（口味问题）/ poor_service（服务差）/ long_wait（等待太久）/
-    overpriced（价格偏高）/ hygiene_issue（卫生问题）/ location_issue（位置不便）/
-    packaging_issue（包装问题）/ none（无明显问题）
-
-- action_priority: 商家处理紧迫程度 (low / medium / high)
-
-- operator_action: 商家最应该做的一件事（只选一个）：
-    improve_taste / train_service / reduce_wait /
-    review_pricing / fix_hygiene / no_action
-
-规则：
-1. 只输出 JSON，不要其他文字
-2. 正面评论（无投诉）→ problem_type=none，action_priority=low，operator_action=no_action
-3. 只选上面列出的合法值"""
-
-
-def build_prompt(text: str, aspects: dict) -> str:
-    aspect_str = json.dumps(aspects, ensure_ascii=False)
-    return f"""评论：{text[:300]}
-
-已知 aspect 情感：{aspect_str}
-
-输出 JSON（仅 3 个字段）："""
-
-
-def validate(label: dict) -> tuple[bool, str]:
-    for field in ["problem_type", "action_priority", "operator_action"]:
-        if field not in label:
-            return False, f"缺少字段: {field}"
-    if label["problem_type"] not in VALID_PROBLEM_TYPE:
-        return False, f"problem_type 非法: {label['problem_type']}"
-    if label["action_priority"] not in VALID_ACTION_PRIORITY:
-        return False, f"action_priority 非法: {label['action_priority']}"
-    if label["operator_action"] not in VALID_OPERATOR_ACTION:
-        return False, f"operator_action 非法: {label['operator_action']}"
-    return True, ""
-
-
-def call_deepseek(client: OpenAI, text: str, aspects: dict) -> Optional[dict]:
-    for attempt in range(LABEL_MAX_RETRIES):
-        try:
-            resp = client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": build_prompt(text, aspects)},
-                ],
-                temperature=LABEL_TEMPERATURE,
-                max_tokens=100,
-            )
-            raw = resp.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            label = json.loads(raw.strip())
-            ok, err = validate(label)
-            if ok:
-                return label
-            print(f"  ⚠ 校验失败（第{attempt+1}次）: {err}")
-        except json.JSONDecodeError as e:
-            print(f"  ⚠ JSON 解析失败（第{attempt+1}次）: {e}")
-        except Exception as e:
-            print(f"  ⚠ API 错误（第{attempt+1}次）: {e}")
-            time.sleep(2 ** attempt)
-    return None
+def label_one(client: OpenAI, text: str, aspects: dict) -> Optional[dict]:
+    result, meta = call_structured(
+        client, ASAP_PROFILE, text, mode="operational",
+        aspect_context=aspects,
+        temperature=LABEL_TEMPERATURE, max_tokens=100,
+        max_repairs=LABEL_MAX_RETRIES - 1,
+    )
+    if result is None:
+        print(f"  ⚠ 标注失败: {meta['error']}")
+        return None
+    return result.model_dump()
 
 
 def load_done_ids(out_path: Path) -> set:
@@ -166,7 +95,7 @@ def main():
          open(failed_path, "a", encoding="utf-8") as f_fail:
 
         for record in tqdm(records, desc="补标注中"):
-            extra = call_deepseek(
+            extra = label_one(
                 client,
                 record["text"],
                 record["label"]["aspect_sentiments"]

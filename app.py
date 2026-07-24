@@ -3,13 +3,20 @@ Review Intelligence · 评论智能分析
 4-method comparison: TextBlob → Zero-shot LLM → Few-shot LLM → Fine-tuned Qwen2.5-1.5B
 """
 
-import json, os, re, time
+import json, os, sys
 from pathlib import Path
 
 import streamlit as st
 from textblob import TextBlob
 from openai import OpenAI
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+from schema import ASAP_PROFILE, YELP_PROFILE
+from prompts import FEW_SHOT_BANK, build_persona_prompt
+from structured_client import call_structured
+from guardrails import check_input, redact_pii, check_output_consistency
+import review_queue
 
 st.set_page_config(page_title="Review Intelligence", page_icon="🍜", layout="wide")
 
@@ -100,23 +107,6 @@ ASAP_ACTIONS = {
     "improve_taste":"改善口味","train_service":"培训服务","reduce_wait":"减少等待",
     "review_pricing":"检讨定价","fix_hygiene":"改善卫生","no_action":"无需处理",
 }
-ASAP_SYSTEM = """你是餐厅经营分析助手。分析中文餐厅评论，输出结构化 JSON。
-字段：sentiment(positive/neutral/negative)，rating_prediction(1-5整数)，
-aspect_sentiments({aspect:sentiment}，aspect选：food_taste,food_portion,food_appearance,
-service_attitude,service_wait_time,service_speed,price_level,price_value,
-env_decoration,env_cleanliness,location_traffic)，
-problem_type(taste_issue/poor_service/long_wait/overpriced/hygiene_issue/none)，
-action_priority(low/medium/high)，
-operator_action(improve_taste/train_service/reduce_wait/review_pricing/fix_hygiene/no_action)。
-只输出 JSON。"""
-ASAP_FEW_SHOTS = [
-    {"review":"菜品非常新鲜，口味地道，服务也很好，就是价格稍微贵了点。",
-     "output":{"sentiment":"positive","rating_prediction":4,"aspect_sentiments":{"food_taste":"positive","service_attitude":"positive","price_level":"negative"},"problem_type":"overpriced","action_priority":"low","operator_action":"review_pricing"}},
-    {"review":"等了将近一个小时才上菜，服务员态度也很差，菜的味道一般。",
-     "output":{"sentiment":"negative","rating_prediction":1,"aspect_sentiments":{"service_wait_time":"negative","service_attitude":"negative","food_taste":"neutral"},"problem_type":"poor_service","action_priority":"high","operator_action":"train_service"}},
-    {"review":"环境不错，装修有特色，菜量偏少，价格还可以，服务一般。",
-     "output":{"sentiment":"neutral","rating_prediction":3,"aspect_sentiments":{"env_decoration":"positive","food_portion":"negative","price_level":"neutral"},"problem_type":"none","action_priority":"low","operator_action":"no_action"}},
-]
 ASAP_TB_KW = {
     "food_taste":       ["food","taste","delicious","bland","flavor"],
     "service_attitude": ["service","staff","waiter","rude","friendly"],
@@ -124,13 +114,6 @@ ASAP_TB_KW = {
     "env_decoration":   ["ambiance","atmosphere","decor"],
     "service_wait_time":["wait","slow","forever"],
 }
-ASAP_FT_SYSTEM = """你是一个专门用于餐厅运营路由的轻量级模型（Qwen2.5-1.5B QLoRA微调版）。
-给定餐厅评论，只输出以下 3 个字段的 JSON：
-- problem_type: taste_issue / poor_service / long_wait / overpriced / hygiene_issue / none
-- action_priority: low / medium / high
-- operator_action: improve_taste / train_service / reduce_wait / review_pricing / fix_hygiene / no_action
-只输出 JSON，不含其他字段。"""
-
 # ── Yelp config ───────────────────────────────────────────────────────────────
 YELP_EXAMPLES = [
     ("⭐⭐⭐⭐⭐ Great",   "Absolutely loved it! The food was fresh and flavorful, staff were warm and attentive. Prices are fair for the quality. Will definitely be back."),
@@ -151,21 +134,6 @@ YELP_ACTIONS = {
     "fix_quality":"Improve food quality","improve_logistics":"Speed up service","train_service":"Train staff",
     "review_pricing":"Review pricing","verify_authenticity":"Check consistency","no_action":"No action needed",
 }
-YELP_SYSTEM = """You are a restaurant review analyst. Analyze the review and output structured JSON.
-Fields: sentiment(positive/neutral/negative), rating_prediction(1-5 int),
-aspect_sentiments({aspect:sentiment}, aspects: product_quality, customer_service, value, packaging, logistics, authenticity),
-problem_type(quality_issue/slow_logistics/poor_service/overpriced/fake_product/packaging_damage/none),
-action_priority(low/medium/high),
-operator_action(fix_quality/improve_logistics/train_service/review_pricing/verify_authenticity/no_action).
-Output JSON only."""
-YELP_FEW_SHOTS = [
-    {"review":"Great food, friendly staff, a bit pricey but totally worth it.",
-     "output":{"sentiment":"positive","rating_prediction":4,"aspect_sentiments":{"product_quality":"positive","customer_service":"positive","value":"neutral"},"problem_type":"none","action_priority":"low","operator_action":"no_action"}},
-    {"review":"Waited over an hour, food was cold, staff were rude and dismissive.",
-     "output":{"sentiment":"negative","rating_prediction":1,"aspect_sentiments":{"customer_service":"negative","logistics":"negative","product_quality":"negative"},"problem_type":"poor_service","action_priority":"high","operator_action":"train_service"}},
-    {"review":"Decent place, nothing special. Food okay, service average, fair prices.",
-     "output":{"sentiment":"neutral","rating_prediction":3,"aspect_sentiments":{"product_quality":"neutral","customer_service":"neutral","value":"positive"},"problem_type":"none","action_priority":"low","operator_action":"no_action"}},
-]
 YELP_TB_KW = {
     "product_quality":  ["food","taste","delicious","bland","flavor","fresh","stale"],
     "customer_service": ["service","staff","waiter","rude","friendly","attentive","ignored"],
@@ -173,13 +141,6 @@ YELP_TB_KW = {
     "packaging":        ["presentation","plating","packaging","wrapped"],
     "logistics":        ["wait","slow","fast","quick","delivery","forever","hour"],
 }
-YELP_FT_SYSTEM = """You are a lightweight ops-routing model (fine-tuned Qwen2.5-1.5B QLoRA).
-Given a restaurant review, output ONLY a JSON with exactly 3 fields:
-- problem_type: quality_issue / slow_logistics / poor_service / overpriced / packaging_damage / none
-- action_priority: low / medium / high
-- operator_action: fix_quality / improve_logistics / train_service / review_pricing / verify_authenticity / no_action
-Output JSON only. No other fields."""
-
 # ── Pre-computed fine-tuned predictions for sample reviews ────────────────────
 # These are actual outputs from the QLoRA-trained Qwen2.5-1.5B model
 FINETUNED_PRECOMPUTED = {
@@ -215,15 +176,13 @@ FINETUNED_PRECOMPUTED = {
 
 # ── Active config ─────────────────────────────────────────────────────────────
 CFG = {
+    "profile":        ASAP_PROFILE        if is_asap else YELP_PROFILE,
     "examples":       ASAP_EXAMPLES       if is_asap else YELP_EXAMPLES,
     "aspects":        ASAP_ASPECTS        if is_asap else YELP_ASPECTS,
     "aspect_labels":  ASAP_ASPECT_LABELS  if is_asap else YELP_ASPECT_LABELS,
     "problems":       ASAP_PROBLEMS       if is_asap else YELP_PROBLEMS,
     "actions":        ASAP_ACTIONS        if is_asap else YELP_ACTIONS,
-    "system":         ASAP_SYSTEM         if is_asap else YELP_SYSTEM,
-    "few_shots":      ASAP_FEW_SHOTS      if is_asap else YELP_FEW_SHOTS,
     "tb_kw":          ASAP_TB_KW          if is_asap else YELP_TB_KW,
-    "ft_system":      ASAP_FT_SYSTEM      if is_asap else YELP_FT_SYSTEM,
     "ft_precomputed": FINETUNED_PRECOMPUTED["asap"] if is_asap else FINETUNED_PRECOMPUTED["yelp"],
     "input_label":    "粘贴大众点评 / 美团评论"  if is_asap else "Paste a Yelp-style restaurant review",
     "placeholder":    "例：环境很好，菜品精致，服务周到，就是停车有点难…" if is_asap else "e.g. Great food, friendly staff, a bit pricey but worth it…",
@@ -236,23 +195,9 @@ CFG = {
     "benchmark_path": "reports/baseline_results.json" if is_asap else "reports/baseline_results_yelp.json",
     "benchmark_cap":  "ASAP · 大众点评真实评论 · 美团点评研究团队 · 46,730 条 · 18 类 Gold Aspect Labels · 200 条 test set" if is_asap else "Yelp Review Full · 650k English reviews · 200-sample cross-lingual test",
     "benchmark_note": "TextBlob F1=0.111（不支持中文，baseline floor）· Few-shot Sentiment F1=0.757" if is_asap else "TextBlob EN F1=0.359 vs ZH F1=0.111 (+3.2×) · Few-shot aspect F1=0.800",
-    "review_key":     "评论" if is_asap else "Review",
-    "output_key":     "输出" if is_asap else "Output",
-    "output_json":    "输出 JSON：" if is_asap else "Output JSON:",
 }
 
 # ── Model logic ───────────────────────────────────────────────────────────────
-def parse_json(raw):
-    raw = raw.strip()
-    raw = re.sub(r"```(?:json)?","",raw).strip().rstrip("`").strip()
-    try: return json.loads(raw)
-    except Exception:
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        if m:
-            try: return json.loads(m.group())
-            except: pass
-    return None
-
 def textblob_predict(text):
     blob = TextBlob(text)
     pol = blob.sentiment.polarity
@@ -270,37 +215,23 @@ def textblob_predict(text):
     }
 
 def llm_predict(client, text, mode="zero"):
-    rk  = CFG["review_key"]
-    ok  = CFG["output_key"]
-    oj  = CFG["output_json"]
-    sep = "：" if is_asap else ": "
-    if mode == "few":
-        ex_str = "".join(f"{rk}{sep}{e['review']}\n{ok}{sep}{json.dumps(e['output'],ensure_ascii=False)}\n\n" for e in CFG["few_shots"])
-        user_msg = f"{ex_str}{rk}{sep}{text[:400]}\n{oj}"
-    else:
-        user_msg = f"{rk}{sep}{text[:400]}\n\n{oj}"
-
-    start = time.time()
-    try:
-        resp = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role":"system","content":CFG["system"]},{"role":"user","content":user_msg}],
-            temperature=0.1, max_tokens=350,
-        )
-        latency = round((time.time()-start)*1000)
-        result = parse_json(resp.choices[0].message.content)
-        if result:
-            result["_latency_ms"]=latency; result["_valid"]=True
-        else:
-            result = {"_valid":False,"_latency_ms":latency}
-    except Exception as e:
-        result = {"_valid":False,"_error":str(e),"_latency_ms":0}
-    return result
+    few_shot = FEW_SHOT_BANK[CFG["profile"].name] if mode == "few" else None
+    result, meta = call_structured(
+        client, CFG["profile"], text, mode="full", few_shot=few_shot, max_tokens=350,
+    )
+    if result is not None:
+        out = result.model_dump()
+        out["_latency_ms"] = meta["latency_ms"]
+        out["_valid"] = True
+        out["_repaired"] = meta["repaired"]
+        return out
+    return {"_valid": False, "_error": meta["error"], "_latency_ms": meta["latency_ms"]}
 
 def finetuned_predict(client, text):
     """Fine-tuned Qwen2.5-1.5B simulation — operational fields only.
     For sample reviews: returns pre-computed actual model output.
-    For custom input: simulates via focused ops-routing prompt.
+    For custom input: simulates via the persona prompt (build_persona_prompt),
+    schema-validated the same way as the baseline calls.
     """
     # Check pre-computed results first
     precomputed = CFG["ft_precomputed"]
@@ -311,26 +242,17 @@ def finetuned_predict(client, text):
     # Custom input: simulate via focused LLM prompt
     if not client:
         return {"_valid": False, "_error": CFG["no_key"]}
-    sep = "：" if is_asap else ": "
-    rk  = CFG["review_key"]
-    oj  = CFG["output_json"]
-    user_msg = f"{rk}{sep}{text[:400]}\n\n{oj}"
-    start = time.time()
-    try:
-        resp = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role":"system","content":CFG["ft_system"]},{"role":"user","content":user_msg}],
-            temperature=0.1, max_tokens=120,
-        )
-        latency = round((time.time()-start)*1000)
-        result = parse_json(resp.choices[0].message.content)
-        if result:
-            result["_latency_ms"]=latency; result["_valid"]=True; result["_mode"]="simulated"
-        else:
-            result = {"_valid":False,"_latency_ms":latency}
-    except Exception as e:
-        result = {"_valid":False,"_error":str(e),"_latency_ms":0}
-    return result
+    result, meta = call_structured(
+        client, CFG["profile"], text, mode="operational",
+        system_prompt=build_persona_prompt(CFG["profile"]), max_tokens=120,
+    )
+    if result is not None:
+        out = result.model_dump()
+        out["_latency_ms"] = meta["latency_ms"]
+        out["_valid"] = True
+        out["_mode"] = "simulated"
+        return out
+    return {"_valid": False, "_error": meta["error"], "_latency_ms": meta["latency_ms"]}
 
 # ── Render result card ────────────────────────────────────────────────────────
 SENT_LABELS = {
@@ -344,11 +266,15 @@ FIELD_LABELS = {
 FL = FIELD_LABELS[ds]
 SL = SENT_LABELS[ds]
 
-def render_result(result, method):
+def render_result(result, method, flags=None):
     colors  = {"textblob":"#6366f1","zero_shot":"#0ea5e9","few_shot":"#10b981","finetuned":"#f59e0b"}
     m_names = {"textblob":"TextBlob","zero_shot":"Zero-shot LLM","few_shot":"Few-shot LLM","finetuned":"Fine-tuned Qwen"}
     color = colors.get(method,"#888")
     st.markdown(f'<div class="method-label" style="color:{color}">⬡ {m_names.get(method,method)}</div>', unsafe_allow_html=True)
+
+    if flags:
+        flag_label = "⚠️ 已转人工复核" if is_asap else "⚠️ Flagged for human review"
+        st.markdown(f'<div class="warn-box">{flag_label}: {", ".join(flags)}</div>', unsafe_allow_html=True)
 
     if method == "textblob":
         st.markdown(f'<div class="warn-box">{CFG["warn_tb"]}</div>', unsafe_allow_html=True)
@@ -497,6 +423,13 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # 人工复核队列徽章 — 见 pages/1_Review_Queue.py
+    _pending = review_queue.queue_stats().get("pending", 0)
+    if _pending:
+        st.warning(t(f"🔔 {_pending} item(s) pending human review", f"🔔 {_pending} 条待人工复核"))
+
+    st.markdown("---")
+
     # Examples
     st.markdown(f"**{CFG['samples_hdr']}**")
     for label, text in CFG["examples"]:
@@ -565,25 +498,45 @@ analyze_btn = st.button(CFG["analyze_btn"], type="primary")
 
 if analyze_btn and input_text.strip():
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com") if api_key else None
+    # 护栏：脱敏后的文本才会真正发给模型/存进队列，不只是展示层打码
+    safe_text, pii_types = redact_pii(input_text)
+    input_flags = check_input(input_text) + ([f"pii_{t.lower()}" for t in pii_types] if pii_types else [])
     with st.spinner(CFG["analyzing"]):
-        tb = textblob_predict(input_text)
-        zs = llm_predict(client, input_text, "zero") if client else {"_valid":False,"_error":CFG["no_key"]}
-        fs = llm_predict(client, input_text, "few")  if client else {"_valid":False,"_error":CFG["no_key"]}
-        ft = finetuned_predict(client, input_text)
+        tb = textblob_predict(safe_text)
+        zs = llm_predict(client, safe_text, "zero") if client else {"_valid":False,"_error":CFG["no_key"]}
+        fs = llm_predict(client, safe_text, "few")  if client else {"_valid":False,"_error":CFG["no_key"]}
+        ft = finetuned_predict(client, safe_text)
+
+    flags = {}
+    for method, result in [("zero_shot", zs), ("few_shot", fs), ("finetuned", ft)]:
+        method_flags = list(input_flags)
+        if not result.get("_valid", True):
+            method_flags.append("schema_validation_failed")
+        else:
+            method_flags += check_output_consistency(result)
+        if method_flags:
+            review_queue.enqueue(
+                dataset=CFG["profile"].name, method=method, review_text=safe_text,
+                prediction=result, reasons=method_flags,
+            )
+        flags[method] = method_flags
+
     st.session_state["results"] = (tb, zs, fs, ft)
+    st.session_state["flags"] = flags
 
 if "results" in st.session_state:
     tb, zs, fs, ft = st.session_state["results"]
+    flags = st.session_state.get("flags", {})
     st.markdown(CFG["results_hdr"])
     c1,c2,c3,c4 = st.columns(4)
     with c1:
         with st.container(border=True): render_result(tb,"textblob")
     with c2:
-        with st.container(border=True): render_result(zs,"zero_shot")
+        with st.container(border=True): render_result(zs,"zero_shot",flags.get("zero_shot"))
     with c3:
-        with st.container(border=True): render_result(fs,"few_shot")
+        with st.container(border=True): render_result(fs,"few_shot",flags.get("few_shot"))
     with c4:
-        with st.container(border=True): render_result(ft,"finetuned")
+        with st.container(border=True): render_result(ft,"finetuned",flags.get("finetuned"))
 
     # Decision callout
     if is_asap:

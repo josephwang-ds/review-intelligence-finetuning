@@ -34,6 +34,9 @@ from tqdm import tqdm
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from config import ROOT, ASAP_PROCESSED_DIR
+from schema import ASAP_PROFILE
+from prompts import build_system_prompt, build_operational_user_message
+from structured_client import extract_json
 
 warnings.filterwarnings("ignore")
 
@@ -43,43 +46,15 @@ REPORTS_DIR.mkdir(exist_ok=True)
 TEST_SAMPLE_SIZE = 200
 RANDOM_SEED = 42
 
-# ── 合法值（与 03_run_baselines.py 保持一致）────────────────────────────────────
-VALID_SENTIMENTS = ["positive", "neutral", "negative"]
-VALID_ASPECTS = [
-    "location_traffic", "location_distance", "location_easy_to_find",
-    "service_wait_time", "service_attitude", "service_parking", "service_speed",
-    "price_level", "price_value", "price_discount",
-    "env_decoration", "env_noise", "env_space", "env_cleanliness",
-    "food_portion", "food_taste", "food_appearance", "food_recommendation",
-]
-VALID_PROBLEM_TYPE = [
-    "taste_issue", "poor_service", "long_wait", "overpriced",
-    "hygiene_issue", "location_issue", "packaging_issue", "none"
-]
-VALID_ACTION_PRIORITY = ["low", "medium", "high"]
-VALID_OPERATOR_ACTION = [
-    "improve_taste", "train_service", "reduce_wait",
-    "review_pricing", "fix_hygiene", "no_action"
-]
+# ── 合法值（唯一事实来源见 schema.ASAP_PROFILE，与 03_run_baselines.py 共用）──────
+VALID_SENTIMENTS = ASAP_PROFILE.sentiments
+VALID_ASPECTS = ASAP_PROFILE.aspects
+VALID_PROBLEM_TYPE = ASAP_PROFILE.problem_types
+VALID_ACTION_PRIORITY = ASAP_PROFILE.priorities
+VALID_OPERATOR_ACTION = ASAP_PROFILE.operator_actions
 
-# ── System Prompt（与 02_label_asap.py / 05_prepare_finetune_data.py 一致）──────
-ASAP_SYSTEM = """你是一个餐厅经营分析助手。根据评论内容和已知的 aspect 情感标签，补充以下 3 个字段：
-
-- problem_type: 最主要的问题类型（只选一个）：
-    taste_issue（口味问题）/ poor_service（服务差）/ long_wait（等待太久）/
-    overpriced（价格偏高）/ hygiene_issue（卫生问题）/ location_issue（位置不便）/
-    packaging_issue（包装问题）/ none（无明显问题）
-
-- action_priority: 商家处理紧迫程度 (low / medium / high)
-
-- operator_action: 商家最应该做的一件事（只选一个）：
-    improve_taste / train_service / reduce_wait /
-    review_pricing / fix_hygiene / no_action
-
-规则：
-1. 只输出 JSON，不要其他文字
-2. 正面评论（无投诉）→ problem_type=none，action_priority=low，operator_action=no_action
-3. 只选上面列出的合法值"""
+# ── System Prompt（与 02_label_asap.py 共用同一份生成逻辑，避免漂移）─────────────
+ASAP_SYSTEM = build_system_prompt(ASAP_PROFILE, mode="operational")
 
 
 # ── 数据加载（与 03_run_baselines.py 相同逻辑）──────────────────────────────────
@@ -279,34 +254,18 @@ def extract_label(record: dict) -> dict:
 
 def build_user_message(record: dict) -> str:
     label = extract_label(record)
-    aspect_str = json.dumps(label.get("aspect_sentiments", {}), ensure_ascii=False)
+    aspects = label.get("aspect_sentiments", {})
     if "text" in record:
-        text = record["text"][:300]
+        text = record["text"]
     else:
         user_content = record["messages"][1]["content"]
         m = re.search(r'评论：(.+?)\n\n输出 JSON', user_content, re.DOTALL)
-        text = m.group(1)[:300] if m else user_content[:300]
-    return f"""评论：{text}
-
-已知 aspect 情感：{aspect_str}
-
-输出 JSON（仅 3 个字段）："""
+        text = m.group(1) if m else user_content
+    return build_operational_user_message(text, aspects, ASAP_PROFILE, max_chars=300)
 
 
 def parse_output(raw: str) -> Optional[dict]:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("```").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except Exception:
-                pass
-    return None
+    return extract_json(raw)
 
 
 def run_inference(model, tokenizer, record: dict, backend: str) -> dict:

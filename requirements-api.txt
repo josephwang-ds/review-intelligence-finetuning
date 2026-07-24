@@ -1,0 +1,18 @@
+# Extra dependencies for local API / test / model-routing work — not needed by
+# the Streamlit demo itself, so kept out of requirements.txt (which Streamlit
+# Community Cloud installs for the live deployment).
+#
+# Install with: pip install -r requirements-api.txt   (pulls in requirements.txt too)
+-r requirements.txt
+
+# Tests
+pytest>=8.0
+
+# API
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Local model routing (src/local_model.py) — base model download is ~3GB
+torch>=2.8
+transformers>=4.57
+peft>=0.17
