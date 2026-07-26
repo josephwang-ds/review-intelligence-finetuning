@@ -72,16 +72,16 @@ Output:
 | Method | Sentiment F1 | Rating MAE | Aspect F1 | JSON Validity | Latency |
 |---|---|---|---|---|---|
 | TextBlob | 0.359 | 1.07 | 0.62 | 100% | <1ms |
-| Zero-shot LLM | 0.699 | 0.435 | 0.721 | 100% | 1249ms |
-| Few-shot LLM | 0.642 | 0.47 | **0.800** | 100% | 1175ms |
+| Zero-shot LLM | 0.720 | 0.44 | 0.710 | 100% | 4322ms |
+| Few-shot LLM | **0.735** | 0.42 | **0.824** | 100% | 5719ms |
 
-*Measured on the now-retired `deepseek-chat` and not yet re-run on `deepseek-v4-flash` — unlike the ASAP table above. Treat cross-table comparisons (e.g. the language-agnostic claim below) as directional until this is re-measured on the same model.*
+*Re-measured 2026-07 on `deepseek-v4-flash`, same run as the ASAP table above — both now on the same model, so the cross-lingual comparison below is apples-to-apples again.*
 
 **Key findings:**
 - TextBlob on Chinese: F1=0.111 (near random, English-only rule system)
 - TextBlob on English: F1=0.359 (+3.2× vs Chinese) — validates language dependency
-- Zero-shot performs comparably across languages (Chinese 0.653 / English 0.699 — measured on different model versions, see note above; both are well above the TextBlob floor either way)
-- Few-shot with Chinese examples hurts English sentiment (-0.057) but helps aspect detection (+0.142)
+- Zero-shot is language-agnostic and slightly stronger on English (Chinese 0.653 vs. English 0.720) — plausibly reflects `deepseek-v4-flash`'s training mix rather than a property of the task
+- Few-shot helps both languages here (ASAP 0.696, Yelp 0.735) — the earlier "few-shot hurts English" finding was specific to the retired model and didn't hold up on re-measurement; not repeating a claim that no longer reproduces
 
 ## Methodology
 

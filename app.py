@@ -199,7 +199,7 @@ CFG = {
     "warn_tb":        "⚠️ TextBlob 不支持中文，结果接近随机（baseline floor）" if is_asap else "ℹ️ TextBlob uses keyword matching (English rule-based baseline)",
     "benchmark_path": "reports/baseline_results.json" if is_asap else "reports/baseline_results_yelp.json",
     "benchmark_cap":  "ASAP · 大众点评真实评论 · 美团点评研究团队 · 46,730 条 · 18 类 Gold Aspect Labels · 200 条 test set" if is_asap else "Yelp Review Full · 650k English reviews · 200-sample cross-lingual test",
-    "benchmark_note": "TextBlob F1=0.111（不支持中文，baseline floor）· Few-shot Sentiment F1=0.757" if is_asap else "TextBlob EN F1=0.359 vs ZH F1=0.111 (+3.2×) · Few-shot aspect F1=0.800",
+    "benchmark_note": "TextBlob F1=0.111（不支持中文，baseline floor）· Few-shot Sentiment F1=0.696" if is_asap else "TextBlob EN F1=0.359 vs ZH F1=0.111 (+3.2×) · Few-shot aspect F1=0.824",
 }
 
 # ── Model logic ───────────────────────────────────────────────────────────────

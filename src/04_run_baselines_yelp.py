@@ -359,7 +359,15 @@ def main():
     print("\n─── 中英文对比摘要 ──────────────────────────────────────────")
     print(f"{'方案':<16} {'ASAP Sentiment F1':>20} {'Yelp Sentiment F1':>20}")
     print("─" * 58)
-    asap_f1 = {"textblob": 0.111, "zero_shot": 0.701, "few_shot": 0.757}
+    # 与 reports/baseline_results.json 的 ASAP 数字保持同步——上次改 03_run_baselines.py
+    # 之后忘了同步这里，导致这个纯打印的对比摘要用了已经过时的数字（不影响存盘的 JSON，
+    # 只是终端输出，但既然发现了就该修，不然下次改 ASAP 数字又要再错一次）。
+    try:
+        with open(REPORTS_DIR / "baseline_results.json", encoding="utf-8") as f:
+            asap_metrics = json.load(f)["metrics"]
+        asap_f1 = {m: asap_metrics[m]["sentiment_f1"] for m in ("textblob", "zero_shot", "few_shot")}
+    except (FileNotFoundError, KeyError):
+        asap_f1 = {"textblob": "N/A", "zero_shot": "N/A", "few_shot": "N/A"}
     for method, label in [("textblob","TextBlob"),("zero_shot","Zero-shot"),("few_shot","Few-shot")]:
         yelp_f1 = all_metrics.get(method, {}).get("sentiment_f1", "N/A")
         print(f"{label:<16} {asap_f1[method]:>20} {str(yelp_f1):>20}")
