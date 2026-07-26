@@ -82,10 +82,15 @@ def health():
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
-    if _client is None:
-        raise HTTPException(status_code=503, detail="DEEPSEEK_API_KEY not configured")
+    # 请求本身是否合法（422）跟服务器有没有配好上游依赖（503）是两件独立的事，
+    # 前者不依赖任何外部状态就能判断，应该先查——不然一个空 text 的请求在没配
+    # DEEPSEEK_API_KEY 的环境里会先收到 503，掩盖了"你发的请求本来就不合法"这件事。
+    # 这个顺序问题在本地一直没暴露，因为本地 .env 里一直有真实 key；CI 里没配
+    # key 才第一次真的跑到这条分支。
     if not req.text.strip():
         raise HTTPException(status_code=422, detail="text must not be empty")
+    if _client is None:
+        raise HTTPException(status_code=503, detail="DEEPSEEK_API_KEY not configured")
 
     profile = PROFILES[req.dataset]
 
