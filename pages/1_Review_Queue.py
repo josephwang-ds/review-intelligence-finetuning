@@ -14,15 +14,28 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from schema import PROFILES
+from demo_data import ensure_demo_data, is_showing_demo_snapshot
 import review_queue
 
 st.set_page_config(page_title="Review Queue", page_icon="🔎", layout="wide")
+
+# 部署环境（Streamlit Cloud）上 runtime/ 是空的，先用真实 seed 跑出来的快照填充，
+# 否则这个页面会是空的。见 src/demo_data.py。
+ensure_demo_data()
+_seeded = is_showing_demo_snapshot()
 
 st.title("🔎 Review Queue")
 st.caption(
     "被护栏标记的预测结果在这里人工复核。correct 时选的修正值就是下一轮 QLoRA "
     "微调可以直接用的 hard negative 样本——见 05_prepare_finetune_data.py。"
 )
+if _seeded:
+    st.info(
+        "📦 当前显示的是一次**真实重放**的快照（`src/07_seed_dashboard_traffic.py` "
+        "把真实评论过了一遍真实 `/analyze`），不是自然产生的线上流量。下面的 "
+        "approve / correct / reject 是真的可以点的。",
+        icon="📦",
+    )
 
 stats = review_queue.queue_stats()
 c1, c2, c3, c4 = st.columns(4)

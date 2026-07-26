@@ -174,7 +174,11 @@ def llm_predict(client: OpenAI, text: str, mode: str = "zero") -> dict:
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.1,
-            max_tokens=300,
+            # deepseek-v4-* 是 reasoning 模型，推理 token 和答案共用这个预算——300 太小，
+            # 会导致 finish_reason=length、content 完全为空（表现成"JSON 解析失败"，
+            # 实际是预算全被推理吃掉了）。这个脚本还没迁移到 structured_client.py，
+            # 所以在这里单独修，跟 src/03_run_baselines.py 保持一致的教训。
+            max_tokens=2000,
         )
         latency = round((time.time() - start) * 1000)
         result = parse_json(resp.choices[0].message.content)

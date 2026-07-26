@@ -29,7 +29,11 @@ REPORTS_DIR = ROOT / "reports"
 # ── API ───────────────────────────────────────────────────────────────────────
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+# DeepSeek 在 2026 年停用了 "deepseek-chat" 这个名字（调用会直接 400），
+# 现在只接受 deepseek-v4-flash / deepseek-v4-pro。flash 是原来 deepseek-chat
+# 对应的快而便宜的那一档，所以作为默认值。
+# 走环境变量可覆盖：下次上游再改名，改 .env 就行，不用动代码。
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 # ── 数据采样 ──────────────────────────────────────────────────────────────────
 DATASET_NAME = "yelp_review_full"

@@ -16,7 +16,12 @@ models/*
 !models/qwen-asap-qlora
 models/qwen-asap-qlora/*
 !models/qwen-asap-qlora/final
+# .env.* blocks real secret files (.env.local, .env.production, ...) but must
+# not swallow .env.example — that's a template with no real values, and the
+# README's Quickstart depends on it being in the repo ("cp .env.example .env").
+# It was accidentally excluded since the very first commit; fixed here.
 .env.*
+!.env.example
 node_modules/
 .next/
 .venv/

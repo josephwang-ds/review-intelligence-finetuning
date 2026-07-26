@@ -2,7 +2,14 @@
 
 This doc covers the deployment shape added in Phase 4 (a FastAPI service, `api/main.py`, wrapping the engine and guardrails built in Phases 1-3 behind an HTTP API) and Phase 5 (model routing between that API and a real local fine-tuned model), plus the trade-offs behind the choices made in both.
 
-## Current state: two entry points, one engine
+## Model migration notes
+
+DeepSeek retired the `deepseek-chat` model name in 2026; calls to it now return `400 invalid_request_error`. This surfaced while re-running the ASAP benchmark and briefly broke it in a specific, instructive way, worth recording rather than quietly papering over:
+
+- **The model name is now centralized and overridable.** `src/config.py` sets `DEEPSEEK_MODEL` from an env var, defaulting to `deepseek-v4-flash` (the direct successor to `deepseek-chat`'s fast/cheap tier). Every call site reads it from there instead of hardcoding a string — `src/04_run_baselines_yelp.py` is the one exception (it predates the Phase 1 refactor and was never migrated onto `structured_client.py`, but it already imported `DEEPSEEK_MODEL` from config, so this fix applied to it for free).
+- **`deepseek-v4-flash` is a reasoning model; `deepseek-chat` wasn't.** Reasoning tokens are generated before the answer and consume the same `max_tokens` budget. The old default (300, sized for a non-reasoning model) meant the entire budget was sometimes spent on reasoning, producing `finish_reason=length` with **empty content** — which looks exactly like "the model won't output JSON" and is easy to misdiagnose as a prompt problem. `structured_client.py`'s default is now 2000; `04_run_baselines_yelp.py`'s inline call was fixed the same way.
+- **A real, unrelated bug this exposed:** the new model returns `aspect_sentiments` as a list of `{"aspect": ..., "sentiment": ...}` objects rather than the expected `{aspect: sentiment}` dict. `schema.py`'s coercion logic only handled list-of-string and dict shapes, so this raised an unhandled `TypeError` — and `structured_client.call_structured` only caught `pydantic.ValidationError`, so the exception propagated straight through and crashed the caller instead of being treated as an invalid-output-worth-a-repair-retry. Both are fixed: `schema.py` now normalizes several real-world shapes (see its docstring), and `call_structured` catches `Exception` generically at that point, on the principle that a validator hitting an unforeseen shape should degrade the same way a `ValidationError` does, not crash the process.
+- **Practical effect on the numbers:** the ASAP benchmark table above was re-measured on `deepseek-v4-flash` and is modestly lower (F1 0.757→0.696) with roughly 4x the latency, which is a real, disclosed result of the model change — not a regression in this codebase. The Yelp table has not been re-measured yet and is flagged as such in the README.
 
 ```mermaid
 flowchart TD

@@ -1,5 +1,7 @@
 # Review Intelligence — Chinese Restaurant Review Benchmark
 
+[![tests](https://github.com/josephwang-ds/review-intelligence-finetuning/actions/workflows/tests.yml/badge.svg)](https://github.com/josephwang-ds/review-intelligence-finetuning/actions/workflows/tests.yml)
+
 **评论智能分析** · 基于美团点评 ASAP 数据集 · 系统对比四种方案 · 从 prompt 到生产部署的完整 LLM 工程实践
 
 Live demo: [josephwang-review-intelligence-finetuning.streamlit.app](https://josephwang-review-intelligence-finetuning.streamlit.app)
@@ -55,13 +57,15 @@ Output:
 | Method | Sentiment F1 | Rating MAE | Aspect F1 | JSON Validity | Latency |
 |---|---|---|---|---|---|
 | TextBlob | 0.111 | 1.20 | 0.00 | 100% | <1ms |
-| Zero-shot LLM | 0.701 | 0.42 | 0.662 | 100% | 1331ms |
-| Few-shot LLM | **0.757** | 0.435 | 0.658 | 100% | 1368ms |
+| Zero-shot LLM | 0.653 | 0.495 | 0.680 | 99.5% | 5970ms |
+| Few-shot LLM | **0.696** | 0.485 | 0.707 | 100% | 5067ms |
 | Fine-tuned Qwen | N/A† | N/A† | N/A† | **100%** | 1093ms |
 
 *† Fine-tuned model specializes in operational fields (problem_type / action_priority / operator_action): accuracy 0.65 / 0.74 / 0.65. Sentiment/rating/aspect use gold labels from ASAP.*
 
-**Cost analysis:** Training cost $1.05 (Colab T4 × 3h). Break-even at **1,105 queries** vs DeepSeek API ($0.001/query → $0.00005/query local).
+*Re-measured 2026-07 on `deepseek-v4-flash` after DeepSeek retired `deepseek-chat` (see [ARCHITECTURE.md](ARCHITECTURE.md#model-migration-notes) — the new model is a reasoning model, which is also why latency roughly quadrupled: reasoning tokens are generated before the answer and billed the same as output). F1 is modestly lower than the original `deepseek-chat` measurement; the fine-tuned model's numbers are untouched since they don't depend on the DeepSeek API.*
+
+**Cost analysis:** Training cost $1.05 (Colab T4 × 3h). Break-even at **1,105 queries** vs DeepSeek API ($0.001/query → $0.00005/query local) — note the per-query API cost assumption predates the latency/token increase above and hasn't been re-derived; treat the break-even count as directional, not exact, until it is.
 
 ### Yelp English (200-sample cross-lingual validation)
 
@@ -71,10 +75,12 @@ Output:
 | Zero-shot LLM | 0.699 | 0.435 | 0.721 | 100% | 1249ms |
 | Few-shot LLM | 0.642 | 0.47 | **0.800** | 100% | 1175ms |
 
+*Measured on the now-retired `deepseek-chat` and not yet re-run on `deepseek-v4-flash` — unlike the ASAP table above. Treat cross-table comparisons (e.g. the language-agnostic claim below) as directional until this is re-measured on the same model.*
+
 **Key findings:**
 - TextBlob on Chinese: F1=0.111 (near random, English-only rule system)
 - TextBlob on English: F1=0.359 (+3.2× vs Chinese) — validates language dependency
-- Zero-shot is truly language-agnostic (Chinese 0.701 ≈ English 0.699)
+- Zero-shot performs comparably across languages (Chinese 0.653 / English 0.699 — measured on different model versions, see note above; both are well above the TextBlob floor either way)
 - Few-shot with Chinese examples hurts English sentiment (-0.057) but helps aspect detection (+0.142)
 
 ## Methodology
@@ -98,7 +104,7 @@ Corrects natural 4–5 star dominance (78% of original data).
 | Layer | Tools |
 |---|---|
 | Data | ASAP (Meituan-Dianping), Yelp Review Full |
-| Labeling | DeepSeek API (silver labels, 3 fields) |
+| Labeling | DeepSeek API (`deepseek-v4-flash`, silver labels, 3 fields) |
 | Baselines | TextBlob, DeepSeek zero-shot / few-shot |
 | Fine-tuning | QLoRA on Qwen2.5-1.5B · r=16 · 3,200 samples · Colab T4 |
 | Structured output | Pydantic (schema-validated, repair-on-failure) |

@@ -14,16 +14,29 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from demo_data import ensure_demo_data, is_showing_demo_snapshot
 import request_log
 import review_queue
 
 st.set_page_config(page_title="Monitoring", page_icon="📈", layout="wide")
+
+# 部署环境（Streamlit Cloud）上 runtime/ 是空的，先用真实 seed 跑出来的快照填充，
+# 否则这个页面会直接 st.stop()。见 src/demo_data.py。
+ensure_demo_data()
+_seeded = is_showing_demo_snapshot()
 
 st.title("📈 Monitoring")
 st.caption(
     "读取真实请求日志（runtime/request_log.db）和护栏队列（runtime/review_queue.db）。"
     "数据量少时，可以先跑 `python src/07_seed_dashboard_traffic.py` 用真实评论重放一批流量。"
 )
+if _seeded:
+    st.info(
+        "📦 下面的数字来自一次**真实重放**的快照——`src/07_seed_dashboard_traffic.py` "
+        "把数据集里的真实评论过了一遍真实 `/analyze` 端点（护栏、路由、schema 校验全部真实执行）。"
+        "是真实计算出来的结果，但不是自然产生的线上流量，这个区别值得说清楚。",
+        icon="📦",
+    )
 
 overall_stats = request_log.stats()
 

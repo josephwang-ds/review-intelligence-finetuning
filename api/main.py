@@ -23,7 +23,6 @@ from fastapi import FastAPI, HTTPException
 from openai import OpenAI
 from pydantic import BaseModel
 
-import local_model
 import request_log
 import review_queue
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
@@ -32,6 +31,17 @@ from prompts import FEW_SHOT_BANK, PROMPT_VERSION
 from router import route_and_predict
 from schema import PROFILES
 from structured_client import call_structured
+
+# local_model 依赖 torch/transformers（requirements-api.txt 里的重依赖）。
+# 只有 mode="operational" 的路由快路径需要它，mode="full" 完全用不上，
+# 所以这里软导入：没装 torch 的环境（比如只跑 requirements.txt 的 CI）依然能
+# 起服务、跑 /analyze 的完整分析，只是 operational 请求会全部走 API 兜底。
+try:
+    import local_model
+    LOCAL_MODEL_AVAILABLE = True
+except ImportError:
+    local_model = None
+    LOCAL_MODEL_AVAILABLE = False
 
 app = FastAPI(title="Review Intelligence API", version=PROMPT_VERSION)
 
@@ -65,7 +75,8 @@ def health():
     return {
         "status": "ok",
         "deepseek_configured": _client is not None,
-        "local_model_loaded": local_model.is_loaded(),
+        "local_model_available": LOCAL_MODEL_AVAILABLE,
+        "local_model_loaded": local_model.is_loaded() if LOCAL_MODEL_AVAILABLE else False,
     }
 
 
@@ -85,9 +96,14 @@ def analyze(req: AnalyzeRequest):
     few_shot_examples = FEW_SHOT_BANK[profile.name] if req.few_shot else None
 
     if req.mode == "operational":
+        # torch 没装时传一个必然失败的 local fn，router 会自然走它已有的
+        # few_shot_fallback_local_failed 兜底分支——不用为这种情况另开一条代码路径。
+        def _unavailable(text, aspect_context=None):
+            raise RuntimeError("local model unavailable: torch/transformers not installed")
+
         result, meta, route = route_and_predict(
             _client, profile, safe_text,
-            local_predict_fn=local_model.predict_operational,
+            local_predict_fn=local_model.predict_operational if LOCAL_MODEL_AVAILABLE else _unavailable,
             api_predict_fn=call_structured,
             few_shot_examples=few_shot_examples,
         )

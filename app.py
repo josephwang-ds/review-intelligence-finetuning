@@ -16,7 +16,12 @@ from schema import ASAP_PROFILE, YELP_PROFILE
 from prompts import FEW_SHOT_BANK, build_persona_prompt
 from structured_client import call_structured
 from guardrails import check_input, redact_pii, check_output_consistency
+from demo_data import ensure_demo_data
 import review_queue
+
+# 部署环境上 runtime/ 是空的（gitignore 的），先用真实 seed 快照填充，
+# 否则侧边栏的待复核计数和 Review Queue / Monitoring 页面都会是空的。
+ensure_demo_data()
 
 st.set_page_config(page_title="Review Intelligence", page_icon="🍜", layout="wide")
 
@@ -217,7 +222,7 @@ def textblob_predict(text):
 def llm_predict(client, text, mode="zero"):
     few_shot = FEW_SHOT_BANK[CFG["profile"].name] if mode == "few" else None
     result, meta = call_structured(
-        client, CFG["profile"], text, mode="full", few_shot=few_shot, max_tokens=350,
+        client, CFG["profile"], text, mode="full", few_shot=few_shot,
     )
     if result is not None:
         out = result.model_dump()
@@ -244,7 +249,7 @@ def finetuned_predict(client, text):
         return {"_valid": False, "_error": CFG["no_key"]}
     result, meta = call_structured(
         client, CFG["profile"], text, mode="operational",
-        system_prompt=build_persona_prompt(CFG["profile"]), max_tokens=120,
+        system_prompt=build_persona_prompt(CFG["profile"]),
     )
     if result is not None:
         out = result.model_dump()

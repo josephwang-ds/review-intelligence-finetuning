@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Only the lean demo deps + pytest. Deliberately NOT requirements-api.txt:
+      # that pulls in torch/transformers (~3GB) for the local-model path, and
+      # nothing in tests/ needs it — tests/test_local_model_device.py only
+      # touches device-selection logic, and tests/test_router.py injects fakes.
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest fastapi httpx
+
+      # eval/ is excluded on purpose: it makes real, paid DeepSeek API calls.
+      # It self-skips without DEEPSEEK_API_KEY, but running it here would either
+      # be a no-op or cost money on every push — neither belongs in CI.
+      - name: Run unit tests
+        run: pytest tests/ -v

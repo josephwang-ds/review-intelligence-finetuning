@@ -85,7 +85,7 @@ def llm_predict(client: OpenAI, text: str, mode: str = "zero") -> dict:
     few_shot = FEW_SHOT_BANK["asap"] if mode == "few" else None
     result, meta = call_structured(
         client, ASAP_PROFILE, text, mode="full", few_shot=few_shot,
-        model=DEEPSEEK_MODEL, max_tokens=300,
+        model=DEEPSEEK_MODEL,  # max_tokens 用 structured_client 的默认值（reasoning 模型需要余量）
     )
     if result is not None:
         out = result.model_dump()
@@ -265,19 +265,27 @@ def main():
     print("TextBlob Sentiment F1 低是预期结果（不支持中文）")
 
     # ── 保存 ──
-    output = {
-        "metrics": all_metrics,
-        "test_size": len(test_data),
-        "predictions": {
-            method: results[method]["predictions"]
-            for method in results
-            if results[method]["predictions"]
-        }
-    }
+    # 合并而不是覆盖：06_evaluate_finetuned.py 会往同一个文件里写 finetuned 指标和
+    # cost_analysis，直接整体覆盖会把那部分结果抹掉（重跑 baseline 不应该让微调模型的
+    # 评测结果消失）。
     out_path = REPORTS_DIR / "baseline_results.json"
+    if out_path.exists():
+        with open(out_path, encoding="utf-8") as f:
+            output = json.load(f)
+    else:
+        output = {}
+
+    output.setdefault("metrics", {}).update(all_metrics)
+    output["test_size"] = len(test_data)
+    output.setdefault("predictions", {}).update({
+        method: results[method]["predictions"]
+        for method in results
+        if results[method]["predictions"]
+    })
+
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
-    print(f"\n已保存：{out_path}")
+    print(f"\n已保存：{out_path}（保留了已有的 finetuned / cost_analysis 结果）")
 
 
 if __name__ == "__main__":

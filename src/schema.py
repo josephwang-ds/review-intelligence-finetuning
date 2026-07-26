@@ -69,6 +69,12 @@ def _profile_of(info: ValidationInfo) -> Optional[DatasetProfile]:
     return (info.context or {}).get("profile") if info.context else None
 
 
+# 模型给 aspect / sentiment 用的字段名，各家措辞不一样。放模块级而不是类属性——
+# Pydantic 会把类里带下划线前缀的属性变成 ModelPrivateAttr，取出来就不是元组了。
+_ASPECT_KEYS = ("aspect", "name", "category", "aspect_name")
+_SENTIMENT_KEYS = ("sentiment", "polarity", "value", "label")
+
+
 class OperationalFields(BaseModel):
     """3 个运营路由字段 — 微调模型 (Qwen2.5-1.5B QLoRA) 的完整输出。"""
 
@@ -129,12 +135,33 @@ class FullReviewAnalysis(OperationalFields):
     @field_validator("aspect_sentiments", mode="before")
     @classmethod
     def _coerce_aspects(cls, v, info: ValidationInfo):
-        # 容错而非拒绝：模型偶尔会输出 list 而非 dict；未知 aspect/sentiment 直接丢弃
+        """容错而非拒绝：把模型实际会吐出来的几种形状都归一成 {aspect: sentiment}。
+
+        真实遇到过的形状（deepseek-v4-flash 就用第 2 种）：
+          1. {"food_taste": "positive"}                              —— 期望形状
+          2. [{"aspect": "food_taste", "sentiment": "positive"}, ...] —— list of dict
+          3. ["food_taste", "service_attitude"]                      —— list of str
+        未知 aspect / 非法 sentiment 一律丢弃，不让它污染下游指标。
+        """
         if isinstance(v, list):
-            v = {a: "neutral" for a in v}
+            coerced = {}
+            for item in v:
+                if isinstance(item, dict):
+                    aspect = next((item[k] for k in _ASPECT_KEYS if k in item), None)
+                    sentiment = next((item[k] for k in _SENTIMENT_KEYS if k in item), "neutral")
+                    # 也可能是 {"food_taste": "positive"} 这种单键 dict
+                    if aspect is None and len(item) == 1:
+                        aspect, sentiment = next(iter(item.items()))
+                    if isinstance(aspect, str):
+                        coerced[aspect] = sentiment
+                elif isinstance(item, str):
+                    coerced[item] = "neutral"
+            v = coerced
         if not isinstance(v, dict):
             return {}
+        # 键/值可能不是字符串（嵌套 dict、数字…），先过滤掉再比对，避免 unhashable/类型错误
+        clean = {a: s for a, s in v.items() if isinstance(a, str) and isinstance(s, str)}
         profile = _profile_of(info)
         if not profile:
-            return v
-        return {a: s for a, s in v.items() if a in profile.aspects and s in profile.sentiments}
+            return clean
+        return {a: s for a, s in clean.items() if a in profile.aspects and s in profile.sentiments}

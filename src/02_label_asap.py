@@ -32,7 +32,7 @@ def label_one(client: OpenAI, text: str, aspects: dict) -> Optional[dict]:
     result, meta = call_structured(
         client, ASAP_PROFILE, text, mode="operational",
         aspect_context=aspects,
-        temperature=LABEL_TEMPERATURE, max_tokens=100,
+        temperature=LABEL_TEMPERATURE,  # 同上：不要再压 max_tokens
         max_repairs=LABEL_MAX_RETRIES - 1,
     )
     if result is None:

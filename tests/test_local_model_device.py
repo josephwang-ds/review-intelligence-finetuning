@@ -1,7 +1,18 @@
 """Cheap structural test for local_model.py — only exercises device-selection
-logic, never calls load_local_model() (which would download the ~3GB base model)."""
+logic, never calls load_local_model() (which would download the ~3GB base model).
 
-import local_model
+Skips entirely when torch isn't installed, so the suite still runs green in a
+lean environment (e.g. CI installing only requirements.txt)."""
+
+import pytest
+
+try:
+    import local_model
+except ImportError:
+    pytest.skip(
+        "torch/transformers not installed (see requirements-api.txt)",
+        allow_module_level=True,
+    )
 
 
 def test_device_returns_valid_torch_device_string():

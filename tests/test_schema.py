@@ -44,6 +44,39 @@ def test_aspect_sentiments_accepts_list_form():
     assert r.aspect_sentiments == {"food_taste": "neutral", "service_attitude": "neutral"}
 
 
+def test_aspect_sentiments_accepts_list_of_dicts():
+    """Regression: deepseek-v4-flash returns this shape. Previously raised an
+    unhandled TypeError ('unhashable type: dict') that escaped Pydantic entirely."""
+    data = dict(VALID_ASAP, aspect_sentiments=[
+        {"aspect": "food_taste", "sentiment": "positive"},
+        {"aspect": "service_attitude", "sentiment": "negative"},
+    ])
+    r = FullReviewAnalysis.model_validate(data, context={"profile": ASAP_PROFILE})
+    assert r.aspect_sentiments == {"food_taste": "positive", "service_attitude": "negative"}
+
+
+def test_aspect_sentiments_accepts_list_of_single_key_dicts():
+    data = dict(VALID_ASAP, aspect_sentiments=[{"food_taste": "positive"}, {"price_level": "negative"}])
+    r = FullReviewAnalysis.model_validate(data, context={"profile": ASAP_PROFILE})
+    assert r.aspect_sentiments == {"food_taste": "positive", "price_level": "negative"}
+
+
+@pytest.mark.parametrize("junk", [
+    [{"nested": {"deep": "value"}}],          # dict-valued, unhashable if used as key
+    [[1, 2], None, 42],                       # lists/None/ints inside the list
+    {"food_taste": {"nested": "dict"}},       # non-str value
+    {123: "positive"},                        # non-str key
+    "not a container at all",
+    None,
+])
+def test_aspect_sentiments_never_raises_on_junk(junk):
+    """The coercion layer must degrade to {} rather than crash — bad model output
+    should never propagate an exception to the caller."""
+    data = dict(VALID_ASAP, aspect_sentiments=junk)
+    r = FullReviewAnalysis.model_validate(data, context={"profile": ASAP_PROFILE})
+    assert isinstance(r.aspect_sentiments, dict)
+
+
 @pytest.mark.parametrize("field,bad_value", [
     ("problem_type", "not_a_real_problem"),
     ("action_priority", "urgent"),

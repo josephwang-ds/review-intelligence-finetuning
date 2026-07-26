@@ -17,6 +17,7 @@ from typing import Literal, Optional, Type
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
+from config import DEEPSEEK_MODEL
 from prompts import PROMPT_VERSION, FewShotExample, build_operational_user_message, build_system_prompt, build_user_message
 from schema import DatasetProfile, FullReviewAnalysis, OperationalFields
 
@@ -52,9 +53,15 @@ def call_structured(
     few_shot: Optional[list[FewShotExample]] = None,
     aspect_context: Optional[dict] = None,
     system_prompt: Optional[str] = None,
-    model: str = "deepseek-chat",
+    model: str = DEEPSEEK_MODEL,
     temperature: float = 0.1,
-    max_tokens: int = 350,
+    # deepseek-v4-* 是 reasoning 模型：推理 token 和答案共用这个预算，而且推理在前。
+    # 给小了（旧的 350，那是给非 reasoning 的 deepseek-chat 定的）会出现最坑的一种
+    # 失败——finish_reason=length，content 完全为空，看起来像"模型不听话不输出 JSON"，
+    # 实际是预算全被推理吃掉了。实测答案本身约 300 token，这里给足余量。
+    # 注意：调大不会让成本明显上升——推理 token 该花还是要花，调小只是把已经花掉的
+    # token 截断浪费掉。
+    max_tokens: int = 2000,
     max_repairs: int = 1,
 ) -> tuple[Optional[BaseModel], dict]:
     """返回 (validated_model_or_None, meta)。
@@ -110,6 +117,12 @@ def call_structured(
                 }
             except ValidationError as e:
                 last_error = str(e)
+            except Exception as e:
+                # 不能只抓 ValidationError：Pydantic 只会把 validator 里的 ValueError /
+                # AssertionError 包装成 ValidationError，其它异常（比如 before-validator
+                # 碰到没预料到的形状抛的 TypeError）会直接穿透出去，把调用方打挂。
+                # 这一层的意义就是"模型输出再离谱也不该 crash 调用方"，所以兜底到修复重试。
+                last_error = f"{type(e).__name__}: {e}"
 
         if attempt < max_repairs:
             repaired = True

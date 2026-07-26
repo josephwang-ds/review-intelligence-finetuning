@@ -1,0 +1,29 @@
+name: keep streamlit awake
+
+# Streamlit Community Cloud 会让一段时间没人访问的 app 休眠，下次打开要先点
+# "Yes, get this app back up!" 再等 30-60 秒——对着简历点进来的人来说这是很差的
+# 第一印象。这里定期 ping 一下，让它别进入休眠。
+#
+# 每 3 天跑一次：远低于休眠阈值，又不会产生没必要的流量。
+on:
+  schedule:
+    - cron: "17 6 */3 * *"   # 每 3 天 06:17 UTC（避开整点高峰）
+  workflow_dispatch:          # 也可以手动触发一次
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the live demo
+        run: |
+          URL="https://josephwang-review-intelligence-finetuning.streamlit.app"
+          echo "Pinging $URL"
+          # -sS 静默但保留错误；-L 跟随跳转；--max-time 防止挂死
+          CODE=$(curl -sS -L -o /dev/null -w "%{http_code}" --max-time 60 "$URL" || echo "000")
+          echo "HTTP $CODE"
+          # 只把"完全连不上"当失败。休眠中的 app 可能返回非 200，但这次 ping 本身
+          # 就是唤醒动作，不该因此把 workflow 标红。
+          if [ "$CODE" = "000" ]; then
+            echo "::error::Could not reach the demo at all"
+            exit 1
+          fi
