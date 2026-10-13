@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/josephwang-ds/review-intelligence-finetuning/actions/workflows/tests.yml/badge.svg)](https://github.com/josephwang-ds/review-intelligence-finetuning/actions/workflows/tests.yml)
 
-**评论智能分析** · 基于美团点评 ASAP 数据集 · 系统对比四种方案 · 从 prompt 到生产部署的完整 LLM 工程实践
+**评论智能分析** · 基于美团点评 ASAP 数据集 · 零样本 / 少样本 LLM 与 QLoRA 微调对比 · 从 prompt 到服务化（本地 / Docker）的 LLM 工程实践
 
 Live demo: [josephwang-review-intelligence-finetuning.streamlit.app](https://josephwang-review-intelligence-finetuning.streamlit.app)
 
@@ -22,6 +22,8 @@ Released by Meituan-Dianping Research · Apache-2.0 · [GitHub](https://github.c
 - 46,730 real Dianping restaurant reviews
 - 18 human-annotated aspect categories (food taste, service attitude, wait time, price, environment, etc.)
 - Official train / dev / test splits (36,850 / 4,940 / 4,940)
+
+> Benchmark numbers below come from a 200-review stratified test sample, so F1 carries roughly ±0.06 sampling error. The fine-tuned model is scored on different (DeepSeek silver-label) operational fields and is not directly comparable to the sentiment F1 of the prompting methods.
 
 **Yelp Review Full** (cross-lingual validation)
 - 650k English restaurant reviews
